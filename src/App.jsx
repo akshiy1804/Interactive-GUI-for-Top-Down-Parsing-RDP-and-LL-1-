@@ -1,0 +1,237 @@
+import './App.css'
+import { useState } from 'react'
+
+function App() {
+  const [page, setPage] = useState('home')
+
+  // Top-Down Parsing page
+  if (page === 'topdown') {
+    return (
+      <div className="app">
+        <button
+          className="back-button"
+          onClick={() => setPage('home')}
+        >
+          ← Back to Home
+        </button>
+
+        <header>
+          <h1>Top-Down Parsing</h1>
+          <p>Choose a parsing technique to continue</p>
+        </header>
+
+        <main className="options-container">
+
+          {/* Recursive Descent Parser */}
+          <div className="option-card">
+            <h2>Recursive Descent Parser</h2>
+
+            <p>
+              A recursive parser where each grammar rule is
+              represented by a procedure or function.
+            </p>
+
+            <button onClick={() => setPage('rdp')}>
+              Open RDP
+            </button>
+          </div>
+
+          {/* LL(1) Parser */}
+          <div className="option-card">
+            <h2>LL(1) Parser</h2>
+
+            <p>
+              A predictive parser that uses one input token and
+              a parsing table to choose the next production.
+            </p>
+
+            <button onClick={() => setPage('ll1')}>
+              Open LL(1)
+            </button>
+          </div>
+
+        </main>
+      </div>
+    )
+  }
+
+  // Recursive Descent Parser page
+ if (page === 'rdp') {
+  return (
+    <div className="app">
+      <button
+        className="back-button"
+        onClick={() => setPage('topdown')}
+      >
+        ← Back to Top-Down Parsing
+      </button>
+
+      <header>
+        <h1>Recursive Descent Parser</h1>
+        <p>
+          Enter a grammar and visualize recursive descent parsing
+          step by step.
+        </p>
+      </header>
+
+      <main className="rdp-container">
+
+        <div className="rdp-input-area">
+
+          <section className="grammar-card">
+            <h2>Grammar Input</h2>
+
+            <textarea
+              rows="10"
+              placeholder="Enter your grammar here..."
+            />
+
+            <button>
+              Generate Parser
+            </button>
+          </section>
+
+          <section className="example-card">
+            <h2>Example Grammar</h2>
+
+            <pre>
+{`E  → T E'
+E' → + T E'
+E' → ε
+T  → id`}
+            </pre>
+
+            <p>
+              Enter one production rule per line.
+            </p>
+          </section>
+
+        </div>
+
+        <section className="visualization-card">
+          <h2>Parsing Visualization</h2>
+
+          <div className="visualization-placeholder">
+            <p>
+              Generate a parser to view the parsing steps.
+            </p>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  )
+}
+
+  // LL(1) Parser page
+ if (page === 'll1') {
+  return (
+    <div className="app">
+      <button
+        className="back-button"
+        onClick={() => setPage('topdown')}
+      >
+        ← Back to Top-Down Parsing
+      </button>
+
+      <header>
+        <h1>LL(1) Parser</h1>
+        <p>
+          Enter a grammar and explore FIRST, FOLLOW and LL(1) parsing.
+        </p>
+      </header>
+
+      <main className="ll1-container">
+
+        <div className="ll1-input-area">
+
+          <section className="grammar-card">
+            <h2>Grammar Input</h2>
+
+            <textarea
+              rows="10"
+              placeholder="Enter your grammar here..."
+            />
+
+            <button>
+              Generate Parser
+            </button>
+          </section>
+
+          <section className="example-card">
+            <h2>Example Grammar</h2>
+
+            <pre>
+{`E  → T E'
+E' → + T E'
+E' → ε
+T  → id`}
+            </pre>
+
+            <p>
+              Enter one production rule per line.
+            </p>
+          </section>
+
+        </div>
+
+        <section className="ll1-result-card">
+          <h2>FIRST & FOLLOW Sets</h2>
+
+          <div className="result-placeholder">
+            <p>
+              FIRST and FOLLOW sets will appear here.
+            </p>
+          </div>
+        </section>
+
+        <section className="ll1-result-card">
+          <h2>LL(1) Parse Table</h2>
+
+          <div className="result-placeholder">
+            <p>
+              The LL(1) parsing table will appear here.
+            </p>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  )
+}
+
+  // Home page
+  return (
+    <div className="app home-page">
+
+      <header>
+        <h1>Top-Down Parser</h1>
+        <p>Interactive Parser Visualization</p>
+      </header>
+
+      <main className="home-content">
+
+        <h2>What is Top-Down Parsing?</h2>
+
+        <p>
+          Top-down parsing is a parsing technique that starts
+          from the start symbol of a grammar and builds the parse
+          tree from the root towards the input tokens.
+        </p>
+
+        <p>
+          It is commonly used to analyze whether an input string
+          can be generated by a given context-free grammar.
+        </p>
+
+        <button onClick={() => setPage('topdown')}>
+          Explore Top-Down Parsing →
+        </button>
+
+      </main>
+
+    </div>
+  )
+}
+
+export default App
