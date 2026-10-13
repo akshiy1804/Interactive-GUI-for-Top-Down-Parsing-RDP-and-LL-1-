@@ -1,8 +1,35 @@
-import './App.css'
-import { useState } from 'react'
+import './App.css';
+import { useState } from 'react';
 
+import {
+  parseGrammar,
+  computeFirstFollow,
+  buildParseTable,
+  parseLL1
+} from './ll1Parser.js';
 function App() {
   const [page, setPage] = useState('home')
+  const [grammarText, setGrammarText] = useState(
+  "E  → T E'\nE' → + T E'\nE' → ε\nT  → id"
+);
+const [inputText, setInputText] = useState('id + id');
+const [ll1Result, setLl1Result] = useState(null);
+const [error, setError] = useState('');
+
+function generateLL1() {
+  try {
+    const grammar = parseGrammar(grammarText);
+    const sets = computeFirstFollow(grammar);
+    const { table, conflicts } = buildParseTable(grammar, sets);
+    const parsing = parseLL1(grammar, table, inputText);
+
+    setLl1Result({ grammar, sets, table, conflicts, parsing });
+    setError('');
+  } catch (err) {
+    setLl1Result(null);
+    setError(err.message || 'Unable to process the grammar.');
+  }
+}
 
   // Top-Down Parsing page
   if (page === 'topdown') {
@@ -124,81 +151,211 @@ T  → id`}
 }
 
   // LL(1) Parser page
- if (page === 'll1') {
-  return (
-    <div className="app">
-      <button
-        className="back-button"
-        onClick={() => setPage('topdown')}
-      >
-        ← Back to Top-Down Parsing
-      </button>
+ 
+  // LL(1) Parser page
+  if (page === 'll1') {
+    const result = ll1Result;
 
-      <header>
-        <h1>LL(1) Parser</h1>
-        <p>
-          Enter a grammar and explore FIRST, FOLLOW and LL(1) parsing.
-        </p>
-      </header>
+    const terminals = result
+      ? [...new Set(
+          Object.values(result.table).flatMap(row => Object.keys(row))
+        )].sort((a, b) =>
+          a === '$' ? 1 : b === '$' ? -1 : a.localeCompare(b)
+        )
+      : [];
 
-      <main className="ll1-container">
+    return (
+      <div className="app">
+        <button
+          className="back-button"
+          onClick={() => setPage('topdown')}
+        >
+          ← Back to Top-Down Parsing
+        </button>
 
-        <div className="ll1-input-area">
+        <header>
+          <h1>LL(1) Parser</h1>
+          <p>
+            Enter a grammar and explore FIRST, FOLLOW and LL(1) parsing.
+          </p>
+        </header>
 
-          <section className="grammar-card">
-            <h2>Grammar Input</h2>
+        <main className="ll1-container">
+          <div className="ll1-input-area">
+            <section className="grammar-card">
+              <h2>Grammar Input</h2>
 
-            <textarea
-              rows="10"
-              placeholder="Enter your grammar here..."
-            />
+              <textarea
+                rows="10"
+                value={grammarText}
+                onChange={(e) => setGrammarText(e.target.value)}
+                placeholder="Enter one production rule per line..."
+              />
 
-            <button>
-              Generate Parser
-            </button>
-          </section>
+              <h3>Input String</h3>
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Example: id + id"
+              />
 
-          <section className="example-card">
-            <h2>Example Grammar</h2>
+              <button onClick={generateLL1}>
+                Generate Parser
+              </button>
 
-            <pre>
-{`E  → T E'
+              {error && (
+                <p style={{ color: 'red' }}>{error}</p>
+              )}
+            </section>
+
+            <section className="example-card">
+              <h2>Example Grammar</h2>
+              <pre>{`E  → T E'
 E' → + T E'
 E' → ε
-T  → id`}
-            </pre>
+T  → id`}</pre>
+              <p>Enter one production rule per line.</p>
+            </section>
+          </div>
 
-            <p>
-              Enter one production rule per line.
-            </p>
+          <section className="ll1-result-card">
+            <h2>FIRST &amp; FOLLOW Sets</h2>
+
+            {result ? (
+              <div>
+                <h3>FIRST</h3>
+                {Object.entries(result.sets.first).map(([nt, set]) => (
+                  <p key={`first-${nt}`}>
+                    <strong>FIRST({nt})</strong> = {'{ '}
+                    {[...set].join(', ')}
+                    {' }'}
+                  </p>
+                ))}
+
+                <h3>FOLLOW</h3>
+                {Object.entries(result.sets.follow).map(([nt, set]) => (
+                  <p key={`follow-${nt}`}>
+                    <strong>FOLLOW({nt})</strong> = {'{ '}
+                    {[...set].join(', ')}
+                    {' }'}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <div className="result-placeholder">
+                <p>FIRST and FOLLOW sets will appear here.</p>
+              </div>
+            )}
           </section>
 
-        </div>
+          <section className="ll1-result-card">
+            <h2>LL(1) Parse Table</h2>
 
-        <section className="ll1-result-card">
-          <h2>FIRST & FOLLOW Sets</h2>
+            {result ? (
+              <>
+                {result.conflicts.length > 0 && (
+                  <p style={{ color: 'red' }}>
+                    Grammar is not LL(1): parsing table conflicts detected.
+                  </p>
+                )}
 
-          <div className="result-placeholder">
-            <p>
-              FIRST and FOLLOW sets will appear here.
-            </p>
-          </div>
-        </section>
+                {result.conflicts.length === 0 && (
+                  <p style={{ color: 'green' }}>
+                    No conflicts detected in the parsing table.
+                  </p>
+                )}
 
-        <section className="ll1-result-card">
-          <h2>LL(1) Parse Table</h2>
+                <div style={{ overflowX: 'auto' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Non-terminal</th>
+                        {terminals.map(t => (
+                          <th key={t}>{t}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...result.grammar.nonTerminals].map(nt => (
+                        <tr key={nt}>
+                          <th>{nt}</th>
+                          {terminals.map(t => {
+                            const production = result.table[nt]?.[t];
+                            return (
+                              <td key={t}>
+                                {production
+                                  ? `${production.lhs} → ${
+                                      production.rhs.join(' ') || 'ε'
+                                    }`
+                                  : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="result-placeholder">
+                <p>The LL(1) parsing table will appear here.</p>
+              </div>
+            )}
+          </section>
 
-          <div className="result-placeholder">
-            <p>
-              The LL(1) parsing table will appear here.
-            </p>
-          </div>
-        </section>
+          <section className="ll1-result-card">
+            <h2>Parsing Result</h2>
 
-      </main>
-    </div>
-  )
-}
+            {result ? (
+              <>
+                <h3>
+                  {result.parsing.accepted
+                    ? 'Input Accepted'
+                    : 'Input Rejected'}
+                </h3>
+
+                <p>{result.parsing.message}</p>
+
+                {result.conflicts.length > 0 && (
+                  <p>
+                    Warning: this grammar has table conflicts, so the
+                    parsing result may not be reliable.
+                  </p>
+                )}
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Stack</th>
+                        <th>Input</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.parsing.steps.map((step, index) => (
+                        <tr key={index}>
+                          <td>{step.stack}</td>
+                          <td>{step.input}</td>
+                          <td>{step.action}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="result-placeholder">
+                <p>Generate the parser to see the parsing steps.</p>
+              </div>
+            )}
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   // Home page
   return (
