@@ -1,43 +1,371 @@
-import './App.css';
-import { useState } from 'react';
+
+import './App.css'
+import { useEffect, useState } from 'react'
 
 import {
-  parseGrammar,
+  parseGrammar as parseLL1Grammar,
   computeFirstFollow,
   buildParseTable,
   parseLL1
-} from './ll1Parser.js';
-function App() {
-  const [page, setPage] = useState('home')
-  const [grammarText, setGrammarText] = useState(
-  "E  → T E'\nE' → + T E'\nE' → ε\nT  → id"
-);
-const [inputText, setInputText] = useState('id + id');
-const [ll1Result, setLl1Result] = useState(null);
-const [error, setError] = useState('');
+} from './ll1Parser.js'
 
-function generateLL1() {
-  try {
-    const grammar = parseGrammar(grammarText);
-    const sets = computeFirstFollow(grammar);
-    const { table, conflicts } = buildParseTable(grammar, sets);
-    const parsing = parseLL1(grammar, table, inputText);
+// ==================================================
+// RDP: Grammar processing
+// ==================================================
+function parseRDPGrammar(grammarText) {
+  const productions = []
 
-    setLl1Result({ grammar, sets, table, conflicts, parsing });
-    setError('');
-  } catch (err) {
-    setLl1Result(null);
-    setError(err.message || 'Unable to process the grammar.');
+  const lines = grammarText
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const parts = line.includes('→')
+      ? line.split('→')
+      : line.split('->')
+
+    if (parts.length !== 2 || !parts[0].trim()) {
+      continue
+    }
+
+    const lhs = parts[0].trim()
+    const alternatives = parts[1].split('|')
+
+    for (const alternative of alternatives) {
+      const rhsText = alternative.trim()
+
+      productions.push({
+        lhs,
+        rhs: rhsText ? rhsText.split(/\s+/) : ['ε']
+      })
+    }
+  }
+
+  return {
+    productions,
+    nonTerminals: new Set(productions.map(p => p.lhs)),
+    startSymbol: productions.length ? productions[0].lhs : null
   }
 }
 
+const isEpsilon = symbol =>
+  ['ε', 'epsilon', 'eps'].includes(symbol)
+
+// ==================================================
+// RDP: Parser with recorded tree snapshots
+// ==================================================
+function runRecursiveDescent(grammarText, inputText) {
+  const { productions, nonTerminals, startSymbol } =
+    parseRDPGrammar(grammarText)
+
+  if (!startSymbol) {
+    return {
+      success: false,
+      message: 'No valid grammar found. Enter rules such as E → T.',
+      tree: null,
+      steps: []
+    }
+  }
+
+  const tokens = inputText.trim()
+    ? inputText.trim().split(/\s+/)
+    : []
+
+  const productionMap = {}
+
+  productions.forEach(({ lhs, rhs }) => {
+    if (!productionMap[lhs]) productionMap[lhs] = []
+    productionMap[lhs].push(rhs)
+  })
+
+  const root = {
+    symbol: startSymbol,
+    children: []
+  }
+
+  const steps = []
+
+  function cloneTree(node) {
+    return JSON.parse(JSON.stringify(node))
+  }
+
+  function record(action, position, production = '') {
+    steps.push({
+      action,
+      production,
+      inputPosition: position,
+      currentToken: tokens[position] ?? 'End of input',
+      remainingInput: tokens.slice(position).join(' ') || 'ε',
+      tree: cloneTree(root)
+    })
+  }
+
+  record('Start parsing from the start symbol.', 0)
+
+  function parseSymbol(symbol, position, node, depth = 0) {
+    if (depth > 100) {
+      record(
+        `Recursion limit reached while parsing ${symbol}.`,
+        position
+      )
+      return null
+    }
+
+    // Handle terminals and epsilon
+    if (!nonTerminals.has(symbol)) {
+      if (isEpsilon(symbol)) {
+        node.symbol = 'ε'
+        node.children = []
+
+        record('Apply ε. No input token is consumed.', position)
+
+        return { position }
+      }
+
+      if (position < tokens.length && tokens[position] === symbol) {
+        record(`Match terminal "${symbol}".`, position)
+
+        return { position: position + 1 }
+      }
+
+      record(
+        `Expected "${symbol}", but found "${tokens[position] ?? 'end of input'}".`,
+        position
+      )
+
+      return null
+    }
+
+    const alternatives = productionMap[symbol] || []
+
+    for (const rhs of alternatives) {
+      const productionText = `${symbol} → ${rhs.join(' ')}`
+
+      // Reset this branch before trying the production
+      node.children = []
+
+      record(
+        `Expand ${symbol} using ${productionText}.`,
+        position,
+        productionText
+      )
+
+      let currentPosition = position
+      let successful = true
+
+      if (rhs.length === 1 && isEpsilon(rhs[0])) {
+        node.children.push({
+          symbol: 'ε',
+          children: []
+        })
+
+        record(
+          'Apply ε. No input token is consumed.',
+          currentPosition,
+          productionText
+        )
+      } else {
+        for (const rhsSymbol of rhs) {
+          const child = {
+            symbol: rhsSymbol,
+            children: []
+          }
+
+          node.children.push(child)
+
+          const result = parseSymbol(
+            rhsSymbol,
+            currentPosition,
+            child,
+            depth + 1
+          )
+
+          if (!result) {
+            successful = false
+            break
+          }
+
+          currentPosition = result.position
+        }
+      }
+
+      if (successful) {
+        return { position: currentPosition }
+      }
+
+      record(
+        `Backtrack: ${productionText} failed. Trying the next production.`,
+        position,
+        productionText
+      )
+    }
+
+    node.children = []
+    return null
+  }
+
+  const result = parseSymbol(startSymbol, 0, root)
+
+  if (result && result.position === tokens.length) {
+    record(
+      'Input accepted! All tokens have been consumed.',
+      result.position
+    )
+
+    return {
+      success: true,
+      message: 'Input accepted successfully!',
+      tree: cloneTree(root),
+      steps
+    }
+  }
+
+  record(
+    result
+      ? 'Input rejected. Unconsumed input remains.'
+      : 'Input rejected. No production could match the input.',
+    result?.position ?? 0
+  )
+
+  return {
+    success: false,
+    message: 'Input rejected by the grammar.',
+    tree: cloneTree(root),
+    steps
+  }
+}
+
+// ==================================================
+// Parse tree renderer
+// ==================================================
+function ParseTreeNode({ node }) {
+  if (!node) return null
+
+  return (
+    <div className="tree-node-wrapper">
+      <div className="tree-node">
+        {node.symbol}
+      </div>
+
+      {node.children?.length > 0 && (
+        <div className="tree-children">
+          {node.children.map((child, index) => (
+            <ParseTreeNode
+              key={index}
+              node={child}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ==================================================
+// Main App
+// ==================================================
+function App() {
+  const [page, setPage] = useState('home')
+
+  // Shared grammar and input fields
+  const [grammarText, setGrammarText] = useState(
+    "E  → T E'\nE' → + T E'\nE' → ε\nT  → id"
+  )
+
+  const [inputText, setInputText] = useState('id + id')
+
+  // LL(1) state
+  const [ll1Result, setLl1Result] = useState(null)
+  const [error, setError] = useState('')
+
+  // RDP playback state
+  const [rdpResult, setRdpResult] = useState(null)
+  const [rdpSteps, setRdpSteps] = useState([])
+  const [currentStep, setCurrentStep] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+
+  const activeStep = rdpSteps[currentStep]
+
+  // Automatically advance the RDP visualization
+  useEffect(() => {
+    if (!isPlaying || rdpSteps.length === 0) return
+
+    if (currentStep >= rdpSteps.length - 1) {
+      setIsPlaying(false)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      setCurrentStep(step => Math.min(step + 1, rdpSteps.length - 1))
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [isPlaying, currentStep, rdpSteps.length])
+
+  function navigateTo(nextPage) {
+    setIsPlaying(false)
+    setPage(nextPage)
+  }
+
+  // ==================================================
+  // Generate RDP trace
+  // ==================================================
+  function generateRDP() {
+    setIsPlaying(false)
+
+    const result = runRecursiveDescent(grammarText, inputText)
+
+    setRdpResult(result)
+    setRdpSteps(result.steps || [])
+    setCurrentStep(0)
+  }
+
+  function loadRDPExample() {
+    setIsPlaying(false)
+    setGrammarText("E  → T E'\nE' → + T E'\nE' → ε\nT  → id")
+    setInputText('id + id')
+    setRdpResult(null)
+    setRdpSteps([])
+    setCurrentStep(0)
+  }
+
+  // ==================================================
+  // Generate LL(1) result
+  // ==================================================
+  function generateLL1() {
+    setIsPlaying(false)
+
+    try {
+      const grammar = parseLL1Grammar(grammarText)
+      const sets = computeFirstFollow(grammar)
+      const { table, conflicts } = buildParseTable(grammar, sets)
+      const parsing = parseLL1(grammar, table, inputText)
+
+      setLl1Result({
+        grammar,
+        sets,
+        table,
+        conflicts,
+        parsing
+      })
+
+      setError('')
+    } catch (err) {
+      setLl1Result(null)
+      setError(err.message || 'Unable to process the grammar.')
+    }
+  }
+
+  // ==================================================
   // Top-Down Parsing page
+  // ==================================================
   if (page === 'topdown') {
     return (
       <div className="app">
         <button
           className="back-button"
-          onClick={() => setPage('home')}
+          onClick={() => navigateTo('home')}
         >
           ← Back to Home
         </button>
@@ -48,8 +376,6 @@ function generateLL1() {
         </header>
 
         <main className="options-container">
-
-          {/* Recursive Descent Parser */}
           <div className="option-card">
             <h2>Recursive Descent Parser</h2>
 
@@ -58,12 +384,11 @@ function generateLL1() {
               represented by a procedure or function.
             </p>
 
-            <button onClick={() => setPage('rdp')}>
+            <button onClick={() => navigateTo('rdp')}>
               Open RDP
             </button>
           </div>
 
-          {/* LL(1) Parser */}
           <div className="option-card">
             <h2>LL(1) Parser</h2>
 
@@ -72,103 +397,230 @@ function generateLL1() {
               a parsing table to choose the next production.
             </p>
 
-            <button onClick={() => setPage('ll1')}>
+            <button onClick={() => navigateTo('ll1')}>
               Open LL(1)
             </button>
           </div>
-
         </main>
       </div>
     )
   }
 
+  // ==================================================
   // Recursive Descent Parser page
- if (page === 'rdp') {
-  return (
-    <div className="app">
-      <button
-        className="back-button"
-        onClick={() => setPage('topdown')}
-      >
-        ← Back to Top-Down Parsing
-      </button>
+  // ==================================================
+  if (page === 'rdp') {
+    return (
+      <div className="app">
+        <button
+          className="back-button"
+          onClick={() => navigateTo('topdown')}
+        >
+          ← Back to Top-Down Parsing
+        </button>
 
-      <header>
-        <h1>Recursive Descent Parser</h1>
-        <p>
-          Enter a grammar and visualize recursive descent parsing
-          step by step.
-        </p>
-      </header>
+        <header>
+          <h1>Recursive Descent Parser</h1>
+          <p>
+            Generate a parse tree and follow the parsing process
+            one step at a time.
+          </p>
+        </header>
 
-      <main className="rdp-container">
+        <main className="rdp-container">
+          <div className="rdp-input-area">
+            <section className="grammar-card">
+              <h2>Grammar Input</h2>
 
-        <div className="rdp-input-area">
+              <textarea
+                rows="10"
+                value={grammarText}
+                onChange={event => setGrammarText(event.target.value)}
+                placeholder="Enter one production rule per line..."
+              />
 
-          <section className="grammar-card">
-            <h2>Grammar Input</h2>
+              <h3>Input String</h3>
 
-            <textarea
-              rows="10"
-              placeholder="Enter your grammar here..."
-            />
+              <input
+                type="text"
+                value={inputText}
+                onChange={event => setInputText(event.target.value)}
+                placeholder="Example: id + id"
+              />
 
-            <button>
-              Generate Parser
-            </button>
-          </section>
+              <button onClick={generateRDP}>
+                Generate Parser
+              </button>
+            </section>
 
-          <section className="example-card">
-            <h2>Example Grammar</h2>
+            <section className="example-card">
+              <h2>Example Grammar</h2>
 
-            <pre>
-{`E  → T E'
+              <pre>{`E  → T E'
 E' → + T E'
 E' → ε
-T  → id`}
-            </pre>
+T  → id`}</pre>
 
-            <p>
-              Enter one production rule per line.
-            </p>
-          </section>
+              <p>
+                Example input: <strong>id + id</strong>
+              </p>
 
-        </div>
-
-        <section className="visualization-card">
-          <h2>Parsing Visualization</h2>
-
-          <div className="visualization-placeholder">
-            <p>
-              Generate a parser to view the parsing steps.
-            </p>
+              <button
+                className="secondary-button"
+                onClick={loadRDPExample}
+              >
+                Load Example
+              </button>
+            </section>
           </div>
-        </section>
 
-      </main>
-    </div>
-  )
-}
+          <section className="visualization-card">
+            <h2>Live Parse Tree</h2>
 
+            {!rdpResult && (
+              <div className="tree-area">
+                <p>
+                  Enter a grammar and input string, then click
+                  Generate Parser.
+                </p>
+              </div>
+            )}
+
+            {rdpResult && (
+              <>
+                <div
+                  className={
+                    rdpResult.success
+                      ? 'parse-success'
+                      : 'parse-failure'
+                  }
+                >
+                  {rdpResult.message}
+                </div>
+
+                {activeStep && (
+                  <div className="step-panel">
+                    <div className="step-heading">
+                      <strong>
+                        Step {currentStep + 1} of {rdpSteps.length}
+                      </strong>
+
+                      <span>
+                        Input position: {activeStep.inputPosition}
+                      </span>
+                    </div>
+
+                    <p className="step-action">
+                      {activeStep.action}
+                    </p>
+
+                    {activeStep.production && (
+                      <p>
+                        <strong>Production:</strong>{' '}
+                        {activeStep.production}
+                      </p>
+                    )}
+
+                    <div className="input-tracking">
+                      <div>
+                        <span>Current token</span>
+                        <strong>{activeStep.currentToken}</strong>
+                      </div>
+
+                      <div>
+                        <span>Remaining input</span>
+                        <strong>{activeStep.remainingInput}</strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="tree-controls">
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false)
+                      setCurrentStep(step => Math.max(0, step - 1))
+                    }}
+                    disabled={currentStep === 0}
+                  >
+                    ← Previous
+                  </button>
+
+                  <button
+                    className="play-button"
+                    disabled={rdpSteps.length === 0}
+                    onClick={() => {
+                      if (isPlaying) {
+                        setIsPlaying(false)
+                      } else if (currentStep >= rdpSteps.length - 1) {
+                        setCurrentStep(0)
+                        setIsPlaying(true)
+                      } else {
+                        setIsPlaying(true)
+                      }
+                    }}
+                  >
+                    {isPlaying ? '⏸ Pause' : '▶ Play'}
+                  </button>
+
+                  <span>
+                    {rdpSteps.length
+                      ? `${currentStep + 1} / ${rdpSteps.length}`
+                      : '0 / 0'}
+                  </span>
+
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false)
+                      setCurrentStep(step =>
+                        Math.min(rdpSteps.length - 1, step + 1)
+                      )
+                    }}
+                    disabled={
+                      currentStep >= rdpSteps.length - 1 ||
+                      rdpSteps.length === 0
+                    }
+                  >
+                    Next →
+                  </button>
+                </div>
+
+                <div className="tree-area">
+                  {activeStep?.tree ? (
+                    <ParseTreeNode node={activeStep.tree} />
+                  ) : (
+                    <p>No tree snapshot is available.</p>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
+        </main>
+      </div>
+    )
+  }
+
+  // ==================================================
   // LL(1) Parser page
- 
-  // LL(1) Parser page
+  // ==================================================
   if (page === 'll1') {
-    const result = ll1Result;
+    const result = ll1Result
 
     const terminals = result
-      ? [...new Set(
-          Object.values(result.table).flatMap(row => Object.keys(row))
-        )].sort((a, b) =>
+      ? [
+          ...new Set(
+            Object.values(result.table).flatMap(row => Object.keys(row))
+          )
+        ].sort((a, b) =>
           a === '$' ? 1 : b === '$' ? -1 : a.localeCompare(b)
         )
-      : [];
+      : []
 
     return (
       <div className="app">
         <button
           className="back-button"
-          onClick={() => setPage('topdown')}
+          onClick={() => navigateTo('topdown')}
         >
           ← Back to Top-Down Parsing
         </button>
@@ -188,15 +640,16 @@ T  → id`}
               <textarea
                 rows="10"
                 value={grammarText}
-                onChange={(e) => setGrammarText(e.target.value)}
+                onChange={event => setGrammarText(event.target.value)}
                 placeholder="Enter one production rule per line..."
               />
 
               <h3>Input String</h3>
+
               <input
                 type="text"
                 value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
+                onChange={event => setInputText(event.target.value)}
                 placeholder="Example: id + id"
               />
 
@@ -211,10 +664,12 @@ T  → id`}
 
             <section className="example-card">
               <h2>Example Grammar</h2>
+
               <pre>{`E  → T E'
 E' → + T E'
 E' → ε
 T  → id`}</pre>
+
               <p>Enter one production rule per line.</p>
             </section>
           </div>
@@ -225,6 +680,7 @@ T  → id`}</pre>
             {result ? (
               <div>
                 <h3>FIRST</h3>
+
                 {Object.entries(result.sets.first).map(([nt, set]) => (
                   <p key={`first-${nt}`}>
                     <strong>FIRST({nt})</strong> = {'{ '}
@@ -234,6 +690,7 @@ T  → id`}</pre>
                 ))}
 
                 <h3>FOLLOW</h3>
+
                 {Object.entries(result.sets.follow).map(([nt, set]) => (
                   <p key={`follow-${nt}`}>
                     <strong>FOLLOW({nt})</strong> = {'{ '}
@@ -254,13 +711,11 @@ T  → id`}</pre>
 
             {result ? (
               <>
-                {result.conflicts.length > 0 && (
+                {result.conflicts.length > 0 ? (
                   <p style={{ color: 'red' }}>
                     Grammar is not LL(1): parsing table conflicts detected.
                   </p>
-                )}
-
-                {result.conflicts.length === 0 && (
+                ) : (
                   <p style={{ color: 'green' }}>
                     No conflicts detected in the parsing table.
                   </p>
@@ -271,26 +726,29 @@ T  → id`}</pre>
                     <thead>
                       <tr>
                         <th>Non-terminal</th>
-                        {terminals.map(t => (
-                          <th key={t}>{t}</th>
+                        {terminals.map(terminal => (
+                          <th key={terminal}>{terminal}</th>
                         ))}
                       </tr>
                     </thead>
+
                     <tbody>
                       {[...result.grammar.nonTerminals].map(nt => (
                         <tr key={nt}>
                           <th>{nt}</th>
-                          {terminals.map(t => {
-                            const production = result.table[nt]?.[t];
+
+                          {terminals.map(terminal => {
+                            const production = result.table[nt]?.[terminal]
+
                             return (
-                              <td key={t}>
+                              <td key={terminal}>
                                 {production
                                   ? `${production.lhs} → ${
                                       production.rhs.join(' ') || 'ε'
                                     }`
                                   : '—'}
                               </td>
-                            );
+                            )
                           })}
                         </tr>
                       ))}
@@ -334,6 +792,7 @@ T  → id`}</pre>
                         <th>Action</th>
                       </tr>
                     </thead>
+
                     <tbody>
                       {result.parsing.steps.map((step, index) => (
                         <tr key={index}>
@@ -354,26 +813,26 @@ T  → id`}</pre>
           </section>
         </main>
       </div>
-    );
+    )
   }
 
+  // ==================================================
   // Home page
+  // ==================================================
   return (
     <div className="app home-page">
-
       <header>
         <h1>Top-Down Parser</h1>
         <p>Interactive Parser Visualization</p>
       </header>
 
       <main className="home-content">
-
         <h2>What is Top-Down Parsing?</h2>
 
         <p>
-          Top-down parsing is a parsing technique that starts
-          from the start symbol of a grammar and builds the parse
-          tree from the root towards the input tokens.
+          Top-down parsing is a parsing technique that starts from
+          the start symbol of a grammar and builds the parse tree
+          from the root towards the input tokens.
         </p>
 
         <p>
@@ -381,12 +840,10 @@ T  → id`}</pre>
           can be generated by a given context-free grammar.
         </p>
 
-        <button onClick={() => setPage('topdown')}>
+        <button onClick={() => navigateTo('topdown')}>
           Explore Top-Down Parsing →
         </button>
-
       </main>
-
     </div>
   )
 }
